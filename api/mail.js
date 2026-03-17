@@ -57,8 +57,29 @@ module.exports = async function handler(req, res) {
     }
     
     else if (action === 'get') {
-      const messages = await getMessages();
-      return res.status(200).json({ ok: true, messages });
+      // Читаем из нескольких папок
+      const [inbox, sent, self] = await Promise.all([
+        getMessagesFromFolder('INBOX'),
+        getMessagesFromFolder('Отправленные'),
+        getMessagesFromFolder('Письма себе')
+      ]);
+      
+      // Объединяем все сообщения
+      const allMessages = [...inbox, ...sent, ...self];
+      
+      // Сортируем по времени
+      allMessages.sort((a, b) => new Date(a.time) - new Date(b.time));
+      
+      return res.status(200).json({ 
+        ok: true, 
+        messages: allMessages,
+        stats: {
+          inbox: inbox.length,
+          sent: sent.length,
+          self: self.length,
+          total: allMessages.length
+        }
+      });
     }
     
     else {
@@ -74,26 +95,34 @@ module.exports = async function handler(req, res) {
   }
 };
 
-async function getMessages() {
+// Функция для получения писем из конкретной папки
+function getMessagesFromFolder(folderName) {
   return new Promise((resolve, reject) => {
     const imap = new Imap(MAIL_CONFIG.imap);
     const messages = [];
     
     imap.once('ready', () => {
-      imap.openBox('INBOX', false, (err, box) => {
+      // Пробуем открыть папку
+      imap.openBox(folderName, false, (err, box) => {
         if (err) {
-          reject(err);
+          // Если папка не существует, возвращаем пустой массив
+          console.log(`Папка ${folderName} не найдена`);
+          imap.end();
+          resolve([]);
           return;
         }
         
-        // Получаем последние 50 писем
+        console.log(`📬 Читаем папку ${folderName}, писем: ${box.messages.total}`);
+        
+        // Получаем последние 30 писем из папки
         imap.search(['ALL'], (err, results) => {
           if (err) {
-            reject(err);
+            imap.end();
+            resolve([]);
             return;
           }
           
-          const lastMessages = results.slice(-50);
+          const lastMessages = results.slice(-30);
           
           if (lastMessages.length === 0) {
             imap.end();
@@ -115,14 +144,13 @@ async function getMessages() {
                 
                 if (parsed.from && parsed.from.text) {
                   from = parsed.from.text.split('<')[0].trim() || 'Неизвестный';
-                  // Проверяем, не отправили ли мы это письмо сами
                   isOwn = parsed.from.text.includes(MAIL_CONFIG.user);
                 }
                 
-                // Если письмо отправлено нашим ящиком, но не от текущего пользователя,
-                // значит это сообщение от другого участника чата
-                if (isOwn) {
-                  // Пробуем извлечь имя из темы (мы сохраняем имя пользователя в теме)
+                // Если письмо в папке "Отправленные", значит оно наше
+                if (folderName === 'Отправленные' || folderName === 'Письма себе') {
+                  isOwn = true;
+                  // Для отправленных писем имя может быть в теме
                   if (parsed.subject && !parsed.subject.includes('Chat message')) {
                     from = parsed.subject;
                   }
@@ -133,7 +161,8 @@ async function getMessages() {
                   user: from,
                   text: parsed.text || parsed.subject || '...',
                   time: parsed.date || new Date().toISOString(),
-                  isOwn: isOwn // Добавляем флаг для клиента
+                  folder: folderName,
+                  isOwn: isOwn
                 });
                 
                 processed++;
@@ -145,20 +174,20 @@ async function getMessages() {
           });
           
           fetch.once('end', () => {
-            // Сортируем по времени (старые сверху, новые снизу)
-            messages.sort((a, b) => new Date(a.time) - new Date(b.time));
             resolve(messages);
           });
           
           fetch.once('error', (err) => {
-            reject(err);
+            console.log(`Ошибка чтения ${folderName}:`, err);
+            resolve([]);
           });
         });
       });
     });
     
     imap.once('error', (err) => {
-      reject(err);
+      console.log(`Ошибка подключения к ${folderName}:`, err);
+      resolve([]);
     });
     
     imap.connect();
