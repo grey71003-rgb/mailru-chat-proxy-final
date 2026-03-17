@@ -1,6 +1,18 @@
+const imaps = require('imap-simple');
 const nodemailer = require('nodemailer');
 
 const MAIL_CONFIG = {
+  imap: {
+    user: 'chat-helloworld@mail.ru',
+    password: 'Uw5dyegGhHQaVwtagSvP',
+    host: 'imap.mail.ru',
+    port: 993,
+    tls: true,
+    tlsOptions: { rejectUnauthorized: false },
+    // Добавляем подробное логирование
+    debug: console.log,
+    log: console.log
+  },
   smtp: {
     host: 'smtp.mail.ru',
     port: 465,
@@ -15,32 +27,74 @@ const MAIL_CONFIG = {
 module.exports = async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
   const { action } = req.query;
 
   try {
     if (action === 'test') {
-      console.log('📧 Тестируем SMTP подключение...');
+      const result = {
+        smtp: false,
+        imap: false,
+        logs: []
+      };
       
-      const transporter = nodemailer.createTransport(MAIL_CONFIG.smtp);
-      await transporter.verify();
+      // Тест SMTP
+      try {
+        console.log('📧 Тест SMTP...');
+        const transporter = nodemailer.createTransport(MAIL_CONFIG.smtp);
+        await transporter.verify();
+        result.smtp = true;
+        result.logs.push('✅ SMTP OK');
+      } catch (e) {
+        result.logs.push(`❌ SMTP ошибка: ${e.message}`);
+      }
       
-      // Отправляем тестовое письмо
-      await transporter.sendMail({
-        from: MAIL_CONFIG.smtp.auth.user,
-        to: MAIL_CONFIG.smtp.auth.user,
-        subject: 'Тест от чата',
-        text: 'Если вы видите это письмо, SMTP работает!'
+      // Тест IMAP
+      try {
+        console.log('📡 Тест IMAP...');
+        const connection = await imaps.connect(MAIL_CONFIG.imap);
+        result.logs.push('✅ IMAP соединение установлено');
+        
+        await connection.openBox('INBOX');
+        result.logs.push('✅ Папка INBOX открыта');
+        
+        await connection.end();
+        result.imap = true;
+      } catch (e) {
+        result.logs.push(`❌ IMAP ошибка: ${e.message}`);
+        if (e.cause) result.logs.push(`Причина: ${e.cause}`);
+      }
+      
+      res.status(200).json(result);
+    }
+    
+    else if (action === 'simple-imap') {
+      // Максимально упрощенный IMAP тест
+      const Imap = require('imap');
+      
+      const imap = new Imap({
+        user: 'chat-helloworld@mail.ru',
+        password: 'Uw5dyegGhHQaVwtagSvP',
+        host: 'imap.mail.ru',
+        port: 993,
+        tls: true
       });
       
-      res.status(200).json({ ok: true, message: 'SMTP работает! Письмо отправлено' });
-    } else {
-      res.status(400).json({ error: 'Укажите action=test' });
+      imap.once('ready', () => {
+        res.status(200).json({ ok: true, message: 'IMAP готов' });
+        imap.end();
+      });
+      
+      imap.once('error', (err) => {
+        res.status(500).json({ ok: false, error: err.message });
+      });
+      
+      imap.connect();
     }
+    
+    else {
+      res.status(400).json({ error: 'Используйте action=test или action=simple-imap' });
+    }
+    
   } catch (error) {
     console.error('❌ Ошибка:', error);
     res.status(500).json({ error: error.message });
