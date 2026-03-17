@@ -210,7 +210,10 @@ module.exports = async function handler(req, res) {
           });
         });
         
-        imap.once('error', reject);
+        imap.once('error', (err) => {
+          reject(err);
+        });
+        
         imap.connect();
       });
       
@@ -228,7 +231,7 @@ module.exports = async function handler(req, res) {
     
   } catch (error) {
     console.error('❌ Ошибка:', error);
-    res.status(500.json({ 
+    res.status(500).json({ 
       ok: false, 
       error: error.message 
     });
