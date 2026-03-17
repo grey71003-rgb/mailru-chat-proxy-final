@@ -46,17 +46,16 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'SMTP работает!' });
     }
     
-    // ========== ОТПРАВКА ==========
+    // ========== ОТПРАВКА (во Входящие) ==========
     else if (action === 'send') {
       const transporter = nodemailer.createTransport(MAIL_CONFIG.smtp);
       
       // Отправляем письмо и сохраняем во Входящие
       await transporter.sendMail({
         from: MAIL_CONFIG.user,
-        to: MAIL_CONFIG.user,  // Отправляем себе
-        subject: user, // Имя пользователя как тема
+        to: MAIL_CONFIG.user,
+        subject: `[Чат] ${user}`,
         text: text,
-        // Эти заголовки помогут определить, что это сообщение чата
         headers: {
           'X-Chat-Message': 'true',
           'X-Chat-User': user
@@ -66,20 +65,14 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'Отправлено' });
     }
     
-    // ========== ПОЛУЧЕНИЕ СООБЩЕНИЙ (только Входящие) ==========
+    // ========== ПОЛУЧЕНИЕ (из Входящих) ==========
     else if (action === 'get') {
-      const messages = await getMessagesFromInbox();
-      return res.status(200).json({ 
-        ok: true, 
-        messages: messages
-      });
+      const messages = await getMessages();
+      return res.status(200).json({ ok: true, messages });
     }
     
     else {
-      return res.status(200).json({ 
-        ok: true, 
-        message: 'Доступные действия: test, send, get' 
-      });
+      return res.status(200).json({ ok: true, message: 'Используйте: test, send, get' });
     }
     
   } catch (error) {
@@ -88,8 +81,7 @@ module.exports = async function handler(req, res) {
   }
 };
 
-// Функция для получения писем только из Входящих
-function getMessagesFromInbox() {
+function getMessages() {
   return new Promise((resolve, reject) => {
     const imap = new Imap(MAIL_CONFIG.imap);
     const messages = [];
@@ -101,16 +93,14 @@ function getMessagesFromInbox() {
           return;
         }
         
-        console.log(`📬 Читаем Входящие, писем: ${box.messages.total}`);
-        
-        // Получаем последние 50 писем
+        // Получаем все письма
         imap.search(['ALL'], (err, results) => {
           if (err) {
             reject(err);
             return;
           }
           
-          const lastMessages = results.slice(-50);
+          const lastMessages = results.slice(-50); // последние 50
           
           if (lastMessages.length === 0) {
             imap.end();
@@ -129,17 +119,17 @@ function getMessagesFromInbox() {
                 // Определяем отправителя
                 let from = 'Неизвестный';
                 
-                // Если есть заголовок X-Chat-User, используем его
+                // Сначала проверяем заголовок X-Chat-User
                 if (parsed.headers && parsed.headers['x-chat-user']) {
                   from = parsed.headers['x-chat-user'];
                 }
-                // Иначе берем из поля From
+                // Если нет, берем из темы
+                else if (parsed.subject && parsed.subject.startsWith('[Чат]')) {
+                  from = parsed.subject.replace('[Чат]', '').trim();
+                }
+                // Если ничего не нашли, берем из From
                 else if (parsed.from && parsed.from.text) {
                   from = parsed.from.text.split('<')[0].trim() || 'Неизвестный';
-                }
-                // Если это письмо от нас самих, используем тему как имя
-                else if (parsed.subject && parsed.subject.length < 30) {
-                  from = parsed.subject;
                 }
                 
                 messages.push({
@@ -152,15 +142,12 @@ function getMessagesFromInbox() {
                 processed++;
                 if (processed === lastMessages.length) {
                   imap.end();
+                  // Сортируем по времени (старые сверху)
+                  messages.sort((a, b) => new Date(a.time) - new Date(b.time));
+                  resolve(messages);
                 }
               });
             });
-          });
-          
-          fetch.once('end', () => {
-            // Сортируем по времени (старые сверху, новые снизу)
-            messages.sort((a, b) => new Date(a.time) - new Date(b.time));
-            resolve(messages);
           });
           
           fetch.once('error', (err) => {
