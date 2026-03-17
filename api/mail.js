@@ -11,9 +11,10 @@ module.exports = async function handler(req, res) {
   }
 
   const { action } = req.query;
+  const { user, text } = req.body || {};
 
   try {
-    // Просто тест SMTP
+    // ========== ТЕСТ SMTP ==========
     if (action === 'test') {
       const transporter = nodemailer.createTransport({
         host: 'smtp.mail.ru',
@@ -33,25 +34,47 @@ module.exports = async function handler(req, res) {
       });
     }
     
-    // Просто тестовый ответ
+    // ========== ТЕСТОВЫЕ СООБЩЕНИЯ ==========
     else if (action === 'get') {
       return res.status(200).json({
         ok: true,
         messages: [
           {
             id: 1,
-            user: 'Тест',
-            text: 'Это тестовое сообщение',
+            user: 'Система',
+            text: 'Чат работает!',
             time: new Date().toISOString()
           }
         ]
       });
     }
     
+    // ========== ОТПРАВКА ==========
+    else if (action === 'send') {
+      const transporter = nodemailer.createTransport({
+        host: 'smtp.mail.ru',
+        port: 465,
+        secure: true,
+        auth: {
+          user: 'chat-helloworld@mail.ru',
+          pass: 'Uw5dyegGhHQaVwtagSvP'
+        }
+      });
+      
+      await transporter.sendMail({
+        from: 'chat-helloworld@mail.ru',
+        to: 'chat-helloworld@mail.ru',
+        subject: user || 'Чат',
+        text: text || 'Пустое сообщение'
+      });
+      
+      return res.status(200).json({ ok: true, message: 'Отправлено' });
+    }
+    
     else {
       return res.status(200).json({ 
         ok: true, 
-        message: 'API работает. Используйте ?action=test или ?action=get' 
+        message: 'Доступные действия: test, get, send' 
       });
     }
     
