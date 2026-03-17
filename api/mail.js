@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const Imap = require('imap');
+const { simpleParser } = require('mailparser');
 
 const MAIL_CONFIG = {
   user: 'chat-helloworld@mail.ru',
@@ -26,6 +27,7 @@ const MAIL_CONFIG = {
 };
 
 module.exports = async function handler(req, res) {
+  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -57,22 +59,16 @@ module.exports = async function handler(req, res) {
       return res.status(200).json({ ok: true, message: 'Отправлено' });
     }
     
-    // ========== ТЕСТ IMAP ==========
-    else if (action === 'test-imap') {
-      const messages = await getSimpleMessages();
-      return res.status(200).json({ ok: true, count: messages.length, messages });
-    }
-    
     // ========== ПОЛУЧЕНИЕ СООБЩЕНИЙ ==========
     else if (action === 'get') {
-      const messages = await getSimpleMessages();
+      const messages = await getMessages();
       return res.status(200).json({ ok: true, messages });
     }
     
     else {
       return res.status(200).json({ 
         ok: true, 
-        message: 'Доступные действия: test, send, test-imap, get' 
+        message: 'Доступные действия: test, send, get' 
       });
     }
     
@@ -82,8 +78,8 @@ module.exports = async function handler(req, res) {
   }
 };
 
-// Простая функция получения писем
-function getSimpleMessages() {
+// Функция получения писем с правильным декодированием
+async function getMessages() {
   return new Promise((resolve, reject) => {
     const imap = new Imap(MAIL_CONFIG.imap);
     const messages = [];
@@ -95,14 +91,14 @@ function getSimpleMessages() {
           return;
         }
         
-        // Получаем последние 5 писем
+        // Получаем последние 20 писем
         imap.search(['ALL'], (err, results) => {
           if (err) {
             reject(err);
             return;
           }
           
-          const lastMessages = results.slice(-5);
+          const lastMessages = results.slice(-20);
           
           if (lastMessages.length === 0) {
             imap.end();
@@ -111,53 +107,41 @@ function getSimpleMessages() {
           }
           
           let processed = 0;
-          const fetch = imap.fetch(lastMessages, { 
-            bodies: ['HEADER.FIELDS (FROM SUBJECT DATE)', 'TEXT'],
-            struct: true
-          });
+          const fetch = imap.fetch(lastMessages, { bodies: '' });
           
           fetch.on('message', (msg) => {
-            const message = {};
-            
-            msg.on('body', (stream, info) => {
-              let buffer = '';
-              stream.on('data', (chunk) => {
-                buffer += chunk.toString('utf8');
-              });
-              
-              stream.on('end', () => {
-                if (info.which === 'TEXT') {
-                  message.text = buffer.slice(0, 200); // только начало текста
-                } else {
-                  // Парсим заголовки
-                  const from = buffer.match(/From:.*?<(.+?)>/i) || buffer.match(/From:\s*(.+)/i);
-                  const subject = buffer.match(/Subject:\s*(.+)/i);
-                  const date = buffer.match(/Date:\s*(.+)/i);
-                  
-                  message.user = from ? from[1].split('@')[0] : 'Неизвестный';
-                  message.subject = subject ? subject[1].trim() : 'Без темы';
-                  message.time = date ? date[1].trim() : new Date().toISOString();
+            msg.on('body', (stream) => {
+              simpleParser(stream, async (err, parsed) => {
+                if (err) return;
+                
+                // Получаем отправителя
+                let from = 'Неизвестный';
+                if (parsed.from && parsed.from.text) {
+                  from = parsed.from.text.split('<')[0].trim() || 'Неизвестный';
+                }
+                
+                // Получаем текст (декодируем если нужно)
+                let text = parsed.text || parsed.subject || '';
+                
+                messages.push({
+                  id: parsed.messageId || Date.now() + Math.random(),
+                  user: from,
+                  text: text,
+                  time: parsed.date || new Date().toISOString()
+                });
+                
+                processed++;
+                if (processed === lastMessages.length) {
+                  imap.end();
                 }
               });
-            });
-            
-            msg.once('end', () => {
-              messages.push({
-                id: Date.now() + Math.random(),
-                user: message.user || 'Неизвестный',
-                text: message.text || message.subject || '...',
-                time: message.time || new Date().toISOString()
-              });
-              
-              processed++;
-              if (processed === lastMessages.length) {
-                imap.end();
-              }
             });
           });
           
           fetch.once('end', () => {
-            resolve(messages.reverse());
+            // Сортируем по времени
+            messages.sort((a, b) => new Date(a.time) - new Date(b.time));
+            resolve(messages);
           });
           
           fetch.once('error', (err) => {
